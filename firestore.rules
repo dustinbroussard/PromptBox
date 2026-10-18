@@ -1,0 +1,54 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidPrompt(data, userId) {
+      return data.keys().hasAll(['id', 'title', 'content', 'tags', 'createdAt', 'useCount'])
+        && data.keys().hasOnly(['id', 'title', 'preview', 'content', 'tags', 'createdAt', 'lastUsed', 'useCount', 'userId'])
+        && data.id is string && data.id.size() <= 128
+        && data.title is string && data.title.size() <= 500
+        && (!('preview' in data) || data.preview == null || (data.preview is string && data.preview.size() <= 1000))
+        && data.content is string && data.content.size() <= 100000
+        && data.tags is list && data.tags.size() <= 50
+        && data.createdAt is string && data.createdAt.size() <= 50
+        && (!('lastUsed' in data) || data.lastUsed == null || (data.lastUsed is string && data.lastUsed.size() <= 50))
+        && data.useCount is number && data.useCount >= 0
+        && (!('userId' in data) || data.userId == userId || data.userId == request.auth.uid);
+    }
+
+    match /users/{userId}/prompts/{promptId} {
+      allow get: if isOwner(userId) && isValidId(promptId);
+      allow list: if isOwner(userId);
+      allow create: if isOwner(userId) && isValidId(promptId) && isValidPrompt(incoming(), userId);
+      allow update: if isOwner(userId) && isValidId(promptId)
+        && isValidPrompt(incoming(), userId)
+        && incoming().id == existing().id
+        && incoming().createdAt == existing().createdAt;
+      allow delete: if isOwner(userId) && isValidId(promptId);
+    }
+  }
+}

@@ -49,3 +49,22 @@ export interface ImportSummary {
   total: number;
   error?: string;
 }
+
+export interface AuthUser {
+  uid: string;
+  email: string | null;
+  displayName: string | null;
+  photoURL: string | null;
+}
+
+export type FirstTimeSyncChoice = 'merge' | 'useCloud' | 'replaceCloud';
+
+export type SyncConnectionStatus = 'connected' | 'local-cache' | 'offline';
+
+export interface FirstTimeSyncModalData {
+  isOpen: boolean;
+  localCount: number;
+  cloudCount: number;
+  cloudPrompts: Prompt[];
+}
+

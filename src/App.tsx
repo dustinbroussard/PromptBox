@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { Prompt, AiSettings, NotificationItem } from './types';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { Prompt, AiSettings, NotificationItem, AuthUser, FirstTimeSyncChoice, FirstTimeSyncModalData, SyncConnectionStatus } from './types';
 import {
   SAMPLE_PROMPTS,
   DEFAULT_AI_SETTINGS
@@ -22,6 +22,24 @@ import { AiSettingsModal } from './components/AiSettingsModal';
 import { ImportExportModal } from './components/ImportExportModal';
 import { InstallModal } from './components/InstallModal';
 import { NotificationToast } from './components/NotificationToast';
+import { SyncConfirmModal } from './components/SyncConfirmModal';
+
+// Firebase imports
+import {
+  auth,
+  googleProvider,
+  signInWithPopup,
+  signOut,
+  onAuthStateChanged
+} from './firebase/config';
+import {
+  fetchCloudPrompts,
+  subscribeToUserPrompts,
+  savePromptToCloud,
+  deletePromptFromCloud,
+  executeFirstTimeSync,
+  filterOutDefaultSamplePrompts
+} from './firebase/syncService';
 
 export const App: React.FC = () => {
   // Theme state
@@ -38,6 +56,10 @@ export const App: React.FC = () => {
     return prefersDark ? 'default-dark' : 'default-light';
   });
 
+  // Authentication state
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
+
   // Prompts state
   const [prompts, setPrompts] = useState<Prompt[]>(() => {
     try {
@@ -53,7 +75,7 @@ export const App: React.FC = () => {
     return SAMPLE_PROMPTS;
   });
 
-  // AI settings
+  // AI settings (strictly local only)
   const [aiSettings, setAiSettings] = useState<AiSettings>(() => {
     try {
       const saved = localStorage.getItem('promptForgeAiSettings');
@@ -92,49 +114,43 @@ export const App: React.FC = () => {
   const [isImportExportOpen, setIsImportExportOpen] = useState(false);
   const [importExportTab, setImportExportTab] = useState<'export' | 'import'>('export');
 
-  // Sync theme to DOM
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    localStorage.setItem('theme', theme);
-    const meta = document.querySelector('meta[name="theme-color"]');
-    if (meta) {
-      meta.setAttribute('content', theme === 'default-light' ? '#ffffff' : '#000000');
-    }
-  }, [theme]);
+  // First-time sync confirmation state
+  const [syncModalData, setSyncModalData] = useState<FirstTimeSyncModalData>({
+    isOpen: false,
+    localCount: 0,
+    cloudCount: 0,
+    cloudPrompts: []
+  });
 
-  // Persist prompts
-  useEffect(() => {
-    try {
-      localStorage.setItem('promptForgePrompts', JSON.stringify(prompts));
-    } catch (e) {
-      console.error('Failed to save prompts', e);
-    }
-  }, [prompts]);
+  // Active Firestore unsubscribe ref
+  const unsubscribeFirestoreRef = useRef<(() => void) | null>(null);
 
-  // Persist AI settings
-  useEffect(() => {
-    try {
-      localStorage.setItem('promptForgeAiSettings', JSON.stringify(aiSettings));
-    } catch (e) {
-      console.error('Failed to save AI settings', e);
-    }
-  }, [aiSettings]);
+  // Connection and Sync Status
+  const [syncStatus, setSyncStatus] = useState<SyncConnectionStatus>(() => {
+    return typeof navigator !== 'undefined' && !navigator.onLine ? 'offline' : 'local-cache';
+  });
 
-  // Handle body modal-open class
-  const hasOpenModal =
-    Boolean(detailPrompt) ||
-    isNewEditOpen ||
-    isAiAssistantOpen ||
-    isAiSettingsOpen ||
-    isImportExportOpen;
-
+  // Network online/offline event listeners
   useEffect(() => {
-    if (hasOpenModal) {
-      document.body.classList.add('modal-open');
-    } else {
-      document.body.classList.remove('modal-open');
-    }
-  }, [hasOpenModal]);
+    const handleOnline = () => {
+      if (user && unsubscribeFirestoreRef.current) {
+        setSyncStatus('connected');
+      } else {
+        setSyncStatus('local-cache');
+      }
+    };
+    const handleOffline = () => {
+      setSyncStatus('offline');
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [user]);
 
   // Notification helper
   const addNotification = useCallback((message: string, type: 'success' | 'error' = 'success') => {
@@ -145,6 +161,214 @@ export const App: React.FC = () => {
       setNotifications((prev) => prev.filter((n) => n.id !== id));
     }, 3000);
   }, []);
+
+  // Sync theme to DOM
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem('theme', theme);
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) {
+      meta.setAttribute('content', theme === 'default-light' ? '#ffffff' : '#000000');
+    }
+  }, [theme]);
+
+  // Persist prompts locally (acts as offline cache and guest storage)
+  useEffect(() => {
+    try {
+      localStorage.setItem('promptForgePrompts', JSON.stringify(prompts));
+    } catch (e) {
+      console.error('Failed to save prompts locally', e);
+    }
+  }, [prompts]);
+
+  // Persist AI settings locally
+  useEffect(() => {
+    try {
+      localStorage.setItem('promptForgeAiSettings', JSON.stringify(aiSettings));
+    } catch (e) {
+      console.error('Failed to save AI settings', e);
+    }
+  }, [aiSettings]);
+
+  // Subscribe to Firestore for real-time sync
+  const startRealtimeSync = useCallback((userId: string) => {
+    if (unsubscribeFirestoreRef.current) {
+      unsubscribeFirestoreRef.current();
+      unsubscribeFirestoreRef.current = null;
+    }
+
+    const unsub = subscribeToUserPrompts(
+      userId,
+      (cloudPrompts, isFromCache) => {
+        setPrompts(cloudPrompts);
+        if (typeof navigator !== 'undefined' && !navigator.onLine) {
+          setSyncStatus('offline');
+        } else if (isFromCache) {
+          setSyncStatus('local-cache');
+        } else {
+          setSyncStatus('connected');
+        }
+      },
+      (error) => {
+        console.error('Realtime sync error:', error);
+        setSyncStatus(typeof navigator !== 'undefined' && !navigator.onLine ? 'offline' : 'local-cache');
+        addNotification('Sync connection error. Using offline cache.', 'error');
+      }
+    );
+
+    unsubscribeFirestoreRef.current = unsub;
+  }, [addNotification]);
+
+  // Handle Firebase Auth changes
+  useEffect(() => {
+    const unsubAuth = onAuthStateChanged(auth, async (firebaseUser) => {
+      setIsAuthLoading(true);
+
+      if (firebaseUser) {
+        const authUser: AuthUser = {
+          uid: firebaseUser.uid,
+          email: firebaseUser.email,
+          displayName: firebaseUser.displayName,
+          photoURL: firebaseUser.photoURL
+        };
+        setUser(authUser);
+
+        try {
+          // Fetch existing cloud prompts to evaluate initial sync
+          const cloudPrompts = await fetchCloudPrompts(firebaseUser.uid);
+          const currentLocalPrompts = prompts;
+          const nonSampleLocal = filterOutDefaultSamplePrompts(currentLocalPrompts);
+
+          if (cloudPrompts.length > 0 && nonSampleLocal.length > 0) {
+            // Both local and cloud have custom data: prompt user to decide
+            setSyncModalData({
+              isOpen: true,
+              localCount: nonSampleLocal.length,
+              cloudCount: cloudPrompts.length,
+              cloudPrompts
+            });
+          } else if (cloudPrompts.length > 0) {
+            // Local only had sample prompts: adopt cloud prompts directly
+            setPrompts(cloudPrompts);
+            startRealtimeSync(firebaseUser.uid);
+            addNotification('Connected to cloud library.', 'success');
+          } else if (nonSampleLocal.length > 0) {
+            // Cloud is empty, but local has user prompts: upload them
+            const merged = await executeFirstTimeSync(
+              firebaseUser.uid,
+              currentLocalPrompts,
+              [],
+              'merge'
+            );
+            setPrompts(merged);
+            startRealtimeSync(firebaseUser.uid);
+            addNotification('Local prompts synced to cloud.', 'success');
+          } else {
+            // Both are empty/sample only
+            startRealtimeSync(firebaseUser.uid);
+          }
+        } catch (err: unknown) {
+          console.error('Initial sync check failed', err);
+          addNotification('Could not connect to cloud library.', 'error');
+        }
+      } else {
+        // User is signed out
+        if (unsubscribeFirestoreRef.current) {
+          unsubscribeFirestoreRef.current();
+          unsubscribeFirestoreRef.current = null;
+        }
+        setUser(null);
+        setSyncStatus(typeof navigator !== 'undefined' && !navigator.onLine ? 'offline' : 'local-cache');
+
+        // Restore local unauthenticated prompts
+        try {
+          const stored = localStorage.getItem('promptForgePrompts');
+          if (stored) {
+            const parsed = JSON.parse(stored);
+            setPrompts(normalizeImportedData(parsed).prompts);
+          } else {
+            setPrompts(SAMPLE_PROMPTS);
+          }
+        } catch {
+          setPrompts(SAMPLE_PROMPTS);
+        }
+      }
+
+      setIsAuthLoading(false);
+    });
+
+    return () => {
+      unsubAuth();
+      if (unsubscribeFirestoreRef.current) {
+        unsubscribeFirestoreRef.current();
+      }
+    };
+  }, []);
+
+  // Google Sign-In
+  const handleSignIn = async () => {
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (err: unknown) {
+      console.error('Sign-in failed', err);
+      const message = err instanceof Error ? err.message : String(err);
+      addNotification(`Sign-in failed: ${message}`, 'error');
+    }
+  };
+
+  // Sign-Out
+  const handleSignOut = async () => {
+    try {
+      await signOut(auth);
+      addNotification('Signed out successfully.', 'success');
+    } catch (err: unknown) {
+      console.error('Sign-out failed', err);
+      addNotification('Sign-out failed.', 'error');
+    }
+  };
+
+  // First-time sync confirmation resolver
+  const handleConfirmFirstTimeSync = async (choice: FirstTimeSyncChoice) => {
+    if (!user) return;
+    try {
+      const resolved = await executeFirstTimeSync(
+        user.uid,
+        prompts,
+        syncModalData.cloudPrompts,
+        choice
+      );
+      setPrompts(resolved);
+      setSyncModalData((prev) => ({ ...prev, isOpen: false }));
+      startRealtimeSync(user.uid);
+      addNotification('Libraries synchronized successfully!', 'success');
+    } catch (err: unknown) {
+      console.error('First time sync failed', err);
+      addNotification('Failed to synchronize libraries.', 'error');
+    }
+  };
+
+  const handleCancelFirstTimeSync = async () => {
+    setSyncModalData((prev) => ({ ...prev, isOpen: false }));
+    // Sign out to keep local prompts unmerged
+    await handleSignOut();
+  };
+
+  // Handle body modal-open class
+  const hasOpenModal =
+    Boolean(detailPrompt) ||
+    isNewEditOpen ||
+    isAiAssistantOpen ||
+    isAiSettingsOpen ||
+    isImportExportOpen ||
+    syncModalData.isOpen;
+
+  useEffect(() => {
+    if (hasOpenModal) {
+      document.body.classList.add('modal-open');
+    } else {
+      document.body.classList.remove('modal-open');
+    }
+  }, [hasOpenModal]);
 
   // Tag list calculation with counts
   const tagsWithCounts = useMemo(() => {
@@ -202,7 +426,8 @@ export const App: React.FC = () => {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        if (detailPrompt) setDetailPrompt(null);
+        if (syncModalData.isOpen) setSyncModalData((prev) => ({ ...prev, isOpen: false }));
+        else if (detailPrompt) setDetailPrompt(null);
         else if (isNewEditOpen) setIsNewEditOpen(false);
         else if (isAiAssistantOpen) setIsAiAssistantOpen(false);
         else if (isAiSettingsOpen) setIsAiSettingsOpen(false);
@@ -211,7 +436,7 @@ export const App: React.FC = () => {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [detailPrompt, isNewEditOpen, isAiAssistantOpen, isAiSettingsOpen, isImportExportOpen]);
+  }, [detailPrompt, isNewEditOpen, isAiAssistantOpen, isAiSettingsOpen, isImportExportOpen, syncModalData.isOpen]);
 
   // Theme toggle
   const handleToggleTheme = () => {
@@ -230,23 +455,27 @@ export const App: React.FC = () => {
     localStorage.setItem('pf_sort', sort);
   };
 
-  // Prompt actions
+  // Prompt actions with cloud sync
   const handleUsePrompt = (prompt: Prompt) => {
     navigator.clipboard
       .writeText(prompt.content)
       .then(() => {
         addNotification(`'${prompt.title}' copied to clipboard!`, 'success');
-        setPrompts((prev) =>
-          prev.map((p) =>
-            p.id === prompt.id
-              ? {
-                  ...p,
-                  useCount: p.useCount + 1,
-                  lastUsed: new Date().toISOString()
-                }
-              : p
-          )
-        );
+        const updatedPrompt: Prompt = {
+          ...prompt,
+          useCount: prompt.useCount + 1,
+          lastUsed: new Date().toISOString()
+        };
+
+        // Optimistic local update
+        setPrompts((prev) => prev.map((p) => (p.id === prompt.id ? updatedPrompt : p)));
+
+        // Sync to cloud if signed in
+        if (user) {
+          savePromptToCloud(user.uid, updatedPrompt).catch((err) => {
+            console.error('Failed to sync usage to cloud', err);
+          });
+        }
       })
       .catch(() => {
         addNotification('Failed to copy prompt.', 'error');
@@ -269,11 +498,21 @@ export const App: React.FC = () => {
 
   const handleDeletePrompt = (prompt: Prompt) => {
     if (!window.confirm('Are you sure you want to delete this prompt?')) return;
+
+    // Optimistic local update
     setPrompts((prev) => prev.filter((p) => p.id !== prompt.id));
     if (detailPrompt?.id === prompt.id) {
       setDetailPrompt(null);
     }
     addNotification('Prompt deleted successfully!', 'success');
+
+    // Sync deletion to cloud if signed in
+    if (user) {
+      deletePromptFromCloud(user.uid, prompt.id).catch((err) => {
+        console.error('Failed to sync deletion to cloud', err);
+        addNotification('Failed to delete prompt from cloud.', 'error');
+      });
+    }
   };
 
   const handleSavePrompt = (data: {
@@ -283,23 +522,30 @@ export const App: React.FC = () => {
     tags: string[];
   }) => {
     if (data.id) {
-      // Update
-      setPrompts((prev) =>
-        prev.map((p) =>
-          p.id === data.id
-            ? {
-                ...p,
-                title: data.title,
-                content: data.content,
-                preview: createPreviewFromContent(data.content),
-                tags: data.tags
-              }
-            : p
-        )
-      );
+      // Update existing
+      const existing = prompts.find((p) => p.id === data.id);
+      const updatedPrompt: Prompt = {
+        id: data.id,
+        title: data.title,
+        content: data.content,
+        preview: createPreviewFromContent(data.content),
+        tags: data.tags,
+        createdAt: existing?.createdAt || new Date().toISOString(),
+        lastUsed: existing?.lastUsed || null,
+        useCount: existing?.useCount || 0
+      };
+
+      setPrompts((prev) => prev.map((p) => (p.id === data.id ? updatedPrompt : p)));
       addNotification('Prompt updated successfully!', 'success');
+
+      if (user) {
+        savePromptToCloud(user.uid, updatedPrompt).catch((err) => {
+          console.error('Failed to save update to cloud', err);
+          addNotification('Saved locally, but cloud sync failed.', 'error');
+        });
+      }
     } else {
-      // New
+      // Create new
       const newPrompt: Prompt = {
         id: getRandomUUID(),
         title: data.title,
@@ -310,8 +556,16 @@ export const App: React.FC = () => {
         lastUsed: null,
         useCount: 0
       };
+
       setPrompts((prev) => [newPrompt, ...prev]);
       addNotification('Prompt created successfully!', 'success');
+
+      if (user) {
+        savePromptToCloud(user.uid, newPrompt).catch((err) => {
+          console.error('Failed to save new prompt to cloud', err);
+          addNotification('Saved locally, but cloud sync failed.', 'error');
+        });
+      }
     }
     setIsNewEditOpen(false);
     setEditingPrompt(null);
@@ -320,7 +574,6 @@ export const App: React.FC = () => {
   const handleAcceptAiPrompt = (generatedContent: string) => {
     setEditingPrompt(null);
     setIsNewEditOpen(true);
-    // Let NewEditPromptModal receive the content or set initial values
     setEditingPrompt({
       id: '',
       title: 'New AI Prompt',
@@ -338,12 +591,24 @@ export const App: React.FC = () => {
     if (updatedSettings) {
       setAiSettings(updatedSettings);
     }
+
+    // Sync newly imported prompts to cloud if signed in
+    if (user) {
+      nextPrompts.forEach((p) => {
+        savePromptToCloud(user.uid, p).catch((err) => {
+          console.error('Failed to sync imported prompt to cloud', err);
+        });
+      });
+    }
   };
 
   return (
     <>
       <Header
         theme={theme}
+        user={user}
+        isAuthLoading={isAuthLoading}
+        syncStatus={syncStatus}
         onToggleTheme={handleToggleTheme}
         onOpenAiAssistant={() => setIsAiAssistantOpen(true)}
         onOpenImportExport={() => {
@@ -351,6 +616,8 @@ export const App: React.FC = () => {
           setIsImportExportOpen(true);
         }}
         onOpenSettings={() => setIsAiSettingsOpen(true)}
+        onSignIn={handleSignIn}
+        onSignOut={handleSignOut}
       />
 
       <main className="main-container">
@@ -449,6 +716,15 @@ export const App: React.FC = () => {
         onClose={() => setIsImportExportOpen(false)}
         onImportComplete={handleImportComplete}
         onNotify={addNotification}
+      />
+
+      <SyncConfirmModal
+        isOpen={syncModalData.isOpen}
+        localCount={syncModalData.localCount}
+        cloudCount={syncModalData.cloudCount}
+        userEmail={user?.email || null}
+        onConfirm={handleConfirmFirstTimeSync}
+        onCancel={handleCancelFirstTimeSync}
       />
 
       <InstallModal />

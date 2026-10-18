@@ -1,0 +1,65 @@
+{
+  "entities": {
+    "Prompt": {
+      "title": "Prompt",
+      "description": "User prompt entity synchronized across devices",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Unique identifier for the prompt"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Title of the prompt"
+        },
+        "preview": {
+          "type": "string",
+          "maxLength": 1000,
+          "description": "Collapsed short preview of the prompt content"
+        },
+        "content": {
+          "type": "string",
+          "maxLength": 100000,
+          "description": "Full text of the prompt"
+        },
+        "tags": {
+          "type": "array",
+          "description": "Tags associated with the prompt"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "ISO timestamp when the prompt was created"
+        },
+        "lastUsed": {
+          "type": "string",
+          "description": "ISO timestamp when the prompt was last copied or used"
+        },
+        "useCount": {
+          "type": "number",
+          "description": "Number of times the prompt has been used or copied"
+        },
+        "userId": {
+          "type": "string",
+          "description": "Firebase UID of the owner"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "content",
+        "tags",
+        "createdAt",
+        "useCount"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/prompts/{promptId}": {
+      "schema": "Prompt",
+      "description": "Collection of prompts belonging to a specific authenticated user"
+    }
+  }
+}
