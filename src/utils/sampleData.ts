@@ -1,4 +1,4 @@
-import { Prompt, AiSettings } from '../types';
+import type { Prompt, AiSettings } from '../types.ts';
 
 export const DEFAULT_ENHANCEMENT_PROMPT =
   'You are an expert prompt engineer. Improve the prompt for clarity and effectiveness while preserving intent. Return only the improved prompt text.';
@@ -19,6 +19,7 @@ export const SAMPLE_PROMPTS: Prompt[] = [
     content: "You are a creative writing assistant. Help me write engaging stories with vivid descriptions and compelling characters. Focus on 'show don't tell' techniques, create immersive settings, and develop authentic dialogue. Always ask clarifying questions about genre, tone, and target audience before starting.",
     tags: ['writing', 'creative'],
     createdAt: '2024-01-01T10:00:00.000Z',
+    updatedAt: '2024-01-01T10:00:00.000Z',
     lastUsed: '2024-01-01T10:00:00.000Z',
     useCount: 23
   },
@@ -29,6 +30,7 @@ export const SAMPLE_PROMPTS: Prompt[] = [
     content: 'You are an expert code reviewer with deep knowledge of multiple programming languages. Analyze code for best practices, security vulnerabilities, performance optimizations, and maintainability. Provide specific, actionable feedback with examples of improvements.',
     tags: ['coding', 'analysis'],
     createdAt: '2024-01-02T11:30:00.000Z',
+    updatedAt: '2024-01-02T11:30:00.000Z',
     lastUsed: '2024-01-02T11:30:00.000Z',
     useCount: 45
   },
@@ -39,6 +41,7 @@ export const SAMPLE_PROMPTS: Prompt[] = [
     content: "Act as a senior business strategy consultant. Provide strategic business advice with market analysis, competitive positioning, and growth recommendations. Use frameworks like SWOT, Porter's Five Forces, and Blue Ocean Strategy when relevant.",
     tags: ['business', 'analysis'],
     createdAt: '2024-01-03T14:00:00.000Z',
+    updatedAt: '2024-01-03T14:00:00.000Z',
     lastUsed: '2024-01-03T14:00:00.000Z',
     useCount: 12
   },
@@ -49,6 +52,7 @@ export const SAMPLE_PROMPTS: Prompt[] = [
     content: 'You are a Python debugging expert. Help identify errors in Python code, suggest fixes, and explain best practices for writing clean, efficient Python code. Include explanations of common pitfalls and how to avoid them.',
     tags: ['coding', 'python'],
     createdAt: '2024-01-04T16:45:00.000Z',
+    updatedAt: '2024-01-04T16:45:00.000Z',
     lastUsed: '2024-01-04T16:45:00.000Z',
     useCount: 31
   }

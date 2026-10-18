@@ -8,6 +8,7 @@ interface PromptDetailModalProps {
   onUse: (prompt: Prompt) => void;
   onEdit: (prompt: Prompt) => void;
   onDelete: (prompt: Prompt) => void;
+  onDuplicate?: (prompt: Prompt) => void;
 }
 
 export const PromptDetailModal: React.FC<PromptDetailModalProps> = ({
@@ -16,7 +17,8 @@ export const PromptDetailModal: React.FC<PromptDetailModalProps> = ({
   onClose,
   onUse,
   onEdit,
-  onDelete
+  onDelete,
+  onDuplicate
 }) => {
   if (!isOpen || !prompt) return null;
 
@@ -53,6 +55,17 @@ export const PromptDetailModal: React.FC<PromptDetailModalProps> = ({
           >
             <i className="fas fa-copy"></i> Copy Prompt
           </button>
+          {onDuplicate && (
+            <button
+              type="button"
+              id="modal-duplicate-prompt-btn"
+              className="action-btn secondary"
+              onClick={() => onDuplicate(prompt)}
+              title="Duplicate prompt"
+            >
+              <i className="fas fa-clone"></i> Duplicate
+            </button>
+          )}
           <button
             type="button"
             id="modal-edit-prompt-btn"

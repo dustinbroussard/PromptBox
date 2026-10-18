@@ -1,5 +1,14 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { Prompt, AiSettings, NotificationItem, AuthUser, FirstTimeSyncChoice, FirstTimeSyncModalData, SyncConnectionStatus } from './types';
+import {
+  Prompt,
+  PromptTombstone,
+  AiSettings,
+  NotificationItem,
+  AuthUser,
+  FirstTimeSyncChoice,
+  FirstTimeSyncModalData,
+  SyncConnectionStatus
+} from './types';
 import {
   SAMPLE_PROMPTS,
   DEFAULT_AI_SETTINGS
@@ -34,11 +43,14 @@ import {
 } from './firebase/config';
 import {
   fetchCloudPrompts,
+  fetchTombstones,
   subscribeToUserPrompts,
   savePromptToCloud,
   deletePromptFromCloud,
   executeFirstTimeSync,
-  filterOutDefaultSamplePrompts
+  filterOutDefaultSamplePrompts,
+  reconcileRemotePromptsWithLocal,
+  duplicatePrompt
 } from './firebase/syncService';
 
 export const App: React.FC = () => {
@@ -74,6 +86,12 @@ export const App: React.FC = () => {
     }
     return SAMPLE_PROMPTS;
   });
+
+  // Keep a ref to latest prompts to avoid stale closures in async sync handlers
+  const promptsRef = useRef<Prompt[]>(prompts);
+  useEffect(() => {
+    promptsRef.current = prompts;
+  }, [prompts]);
 
   // AI settings (strictly local only)
   const [aiSettings, setAiSettings] = useState<AiSettings>(() => {
@@ -122,35 +140,15 @@ export const App: React.FC = () => {
     cloudPrompts: []
   });
 
-  // Active Firestore unsubscribe ref
+  // Active Firestore unsubscribe ref and tombstones cache
   const unsubscribeFirestoreRef = useRef<(() => void) | null>(null);
+  const tombstonesRef = useRef<Map<string, PromptTombstone>>(new Map());
+  const isSyncDeferredRef = useRef(false);
 
   // Connection and Sync Status
   const [syncStatus, setSyncStatus] = useState<SyncConnectionStatus>(() => {
     return typeof navigator !== 'undefined' && !navigator.onLine ? 'offline' : 'local-cache';
   });
-
-  // Network online/offline event listeners
-  useEffect(() => {
-    const handleOnline = () => {
-      if (user && unsubscribeFirestoreRef.current) {
-        setSyncStatus('connected');
-      } else {
-        setSyncStatus('local-cache');
-      }
-    };
-    const handleOffline = () => {
-      setSyncStatus('offline');
-    };
-
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-    };
-  }, [user]);
 
   // Notification helper
   const addNotification = useCallback((message: string, type: 'success' | 'error' = 'success') => {
@@ -190,7 +188,7 @@ export const App: React.FC = () => {
     }
   }, [aiSettings]);
 
-  // Subscribe to Firestore for real-time sync
+  // Subscribe to Firestore for real-time sync with idempotent conflict resolution
   const startRealtimeSync = useCallback((userId: string) => {
     if (unsubscribeFirestoreRef.current) {
       unsubscribeFirestoreRef.current();
@@ -200,7 +198,25 @@ export const App: React.FC = () => {
     const unsub = subscribeToUserPrompts(
       userId,
       (cloudPrompts, isFromCache) => {
-        setPrompts(cloudPrompts);
+        setPrompts((prevLocal) => {
+          const { nextPrompts, localPromptsToPush } = reconcileRemotePromptsWithLocal(
+            prevLocal,
+            cloudPrompts,
+            tombstonesRef.current
+          );
+
+          // Push any newer local versions or deterministic conflict copies to cloud
+          if (localPromptsToPush.length > 0) {
+            localPromptsToPush.forEach((p) => {
+              savePromptToCloud(userId, p).catch((err) => {
+                console.error('Failed to sync reconciled local prompt to cloud', err);
+              });
+            });
+          }
+
+          return nextPrompts;
+        });
+
         if (typeof navigator !== 'undefined' && !navigator.onLine) {
           setSyncStatus('offline');
         } else if (isFromCache) {
@@ -219,6 +235,96 @@ export const App: React.FC = () => {
     unsubscribeFirestoreRef.current = unsub;
   }, [addNotification]);
 
+  // Evaluates initial synchronization safely
+  const checkAndInitSync = useCallback(async (uid: string) => {
+    try {
+      // 1. Fetch server truth for cloud prompts and tombstones
+      const [cloudPrompts, tombstones] = await Promise.all([
+        fetchCloudPrompts(uid),
+        fetchTombstones(uid)
+      ]);
+
+      tombstonesRef.current = tombstones;
+      isSyncDeferredRef.current = false;
+
+      const currentLocalPrompts = promptsRef.current;
+      // Filter out local prompts that match an active cloud tombstone
+      const activeLocalPrompts = currentLocalPrompts.filter((p) => {
+        const tomb = tombstones.get(p.id);
+        if (!tomb) return true;
+        const tombTime = new Date(tomb.deletedAt).getTime();
+        const localTime = new Date(p.updatedAt || p.createdAt).getTime();
+        return localTime > tombTime; // Recreated locally after deletion
+      });
+
+      const nonSampleLocal = filterOutDefaultSamplePrompts(activeLocalPrompts);
+
+      if (cloudPrompts.length > 0 && nonSampleLocal.length > 0) {
+        // Both local and cloud have custom data: prompt user to decide
+        setSyncModalData({
+          isOpen: true,
+          localCount: nonSampleLocal.length,
+          cloudCount: cloudPrompts.length,
+          cloudPrompts
+        });
+      } else if (cloudPrompts.length > 0) {
+        // Local only had sample prompts: adopt cloud prompts directly
+        setPrompts(cloudPrompts);
+        startRealtimeSync(uid);
+        addNotification('Connected to cloud library.', 'success');
+      } else if (nonSampleLocal.length > 0) {
+        // Cloud is empty, but local has user prompts: upload them
+        const merged = await executeFirstTimeSync(
+          uid,
+          activeLocalPrompts,
+          [],
+          'merge'
+        );
+        setPrompts(merged);
+        startRealtimeSync(uid);
+        addNotification('Local prompts synced to cloud.', 'success');
+      } else {
+        // Both are empty/sample only
+        startRealtimeSync(uid);
+      }
+    } catch (err: unknown) {
+      console.error('Initial sync check failed (offline or network error):', err);
+      // Network failure / offline: treat cloud state as UNKNOWN
+      isSyncDeferredRef.current = true;
+      setSyncStatus('offline');
+      // Do NOT attach live onSnapshot
+      // Do NOT show FirstTimeSync modal
+      // Do NOT wipe or overwrite local prompts
+      addNotification('Offline or server unreachable. Sync deferred until connected.', 'error');
+    }
+  }, [startRealtimeSync, addNotification]);
+
+  // Network online/offline event listeners
+  useEffect(() => {
+    const handleOnline = () => {
+      if (user) {
+        if (isSyncDeferredRef.current || !unsubscribeFirestoreRef.current) {
+          checkAndInitSync(user.uid);
+        } else {
+          setSyncStatus('connected');
+        }
+      } else {
+        setSyncStatus('local-cache');
+      }
+    };
+    const handleOffline = () => {
+      setSyncStatus('offline');
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [user, checkAndInitSync]);
+
   // Handle Firebase Auth changes
   useEffect(() => {
     const unsubAuth = onAuthStateChanged(auth, async (firebaseUser) => {
@@ -232,51 +338,15 @@ export const App: React.FC = () => {
           photoURL: firebaseUser.photoURL
         };
         setUser(authUser);
-
-        try {
-          // Fetch existing cloud prompts to evaluate initial sync
-          const cloudPrompts = await fetchCloudPrompts(firebaseUser.uid);
-          const currentLocalPrompts = prompts;
-          const nonSampleLocal = filterOutDefaultSamplePrompts(currentLocalPrompts);
-
-          if (cloudPrompts.length > 0 && nonSampleLocal.length > 0) {
-            // Both local and cloud have custom data: prompt user to decide
-            setSyncModalData({
-              isOpen: true,
-              localCount: nonSampleLocal.length,
-              cloudCount: cloudPrompts.length,
-              cloudPrompts
-            });
-          } else if (cloudPrompts.length > 0) {
-            // Local only had sample prompts: adopt cloud prompts directly
-            setPrompts(cloudPrompts);
-            startRealtimeSync(firebaseUser.uid);
-            addNotification('Connected to cloud library.', 'success');
-          } else if (nonSampleLocal.length > 0) {
-            // Cloud is empty, but local has user prompts: upload them
-            const merged = await executeFirstTimeSync(
-              firebaseUser.uid,
-              currentLocalPrompts,
-              [],
-              'merge'
-            );
-            setPrompts(merged);
-            startRealtimeSync(firebaseUser.uid);
-            addNotification('Local prompts synced to cloud.', 'success');
-          } else {
-            // Both are empty/sample only
-            startRealtimeSync(firebaseUser.uid);
-          }
-        } catch (err: unknown) {
-          console.error('Initial sync check failed', err);
-          addNotification('Could not connect to cloud library.', 'error');
-        }
+        await checkAndInitSync(firebaseUser.uid);
       } else {
         // User is signed out
         if (unsubscribeFirestoreRef.current) {
           unsubscribeFirestoreRef.current();
           unsubscribeFirestoreRef.current = null;
         }
+        tombstonesRef.current.clear();
+        isSyncDeferredRef.current = false;
         setUser(null);
         setSyncStatus(typeof navigator !== 'undefined' && !navigator.onLine ? 'offline' : 'local-cache');
 
@@ -303,7 +373,7 @@ export const App: React.FC = () => {
         unsubscribeFirestoreRef.current();
       }
     };
-  }, []);
+  }, [checkAndInitSync]);
 
   // Google Sign-In
   const handleSignIn = async () => {
@@ -343,7 +413,8 @@ export const App: React.FC = () => {
       addNotification('Libraries synchronized successfully!', 'success');
     } catch (err: unknown) {
       console.error('First time sync failed', err);
-      addNotification('Failed to synchronize libraries.', 'error');
+      const msg = err instanceof Error ? err.message : String(err);
+      addNotification(`Failed to synchronize: ${msg}`, 'error');
     }
   };
 
@@ -461,6 +532,7 @@ export const App: React.FC = () => {
       .writeText(prompt.content)
       .then(() => {
         addNotification(`'${prompt.title}' copied to clipboard!`, 'success');
+        // Copying/using preserves original updatedAt! Only useCount and lastUsed change.
         const updatedPrompt: Prompt = {
           ...prompt,
           useCount: prompt.useCount + 1,
@@ -496,6 +568,24 @@ export const App: React.FC = () => {
     setIsNewEditOpen(true);
   };
 
+  const handleDuplicatePrompt = (prompt: Prompt) => {
+    const duplicatedPrompt = duplicatePrompt(prompt);
+
+    setPrompts((prev) => [duplicatedPrompt, ...prev]);
+    addNotification(`Duplicated '${prompt.title}'!`, 'success');
+
+    if (user) {
+      savePromptToCloud(user.uid, duplicatedPrompt).catch((err) => {
+        console.error('Failed to save duplicated prompt to cloud', err);
+        addNotification('Saved locally, but cloud sync failed.', 'error');
+      });
+    }
+
+    setEditingPrompt(duplicatedPrompt);
+    setDetailPrompt(null);
+    setIsNewEditOpen(true);
+  };
+
   const handleDeletePrompt = (prompt: Prompt) => {
     if (!window.confirm('Are you sure you want to delete this prompt?')) return;
 
@@ -506,7 +596,7 @@ export const App: React.FC = () => {
     }
     addNotification('Prompt deleted successfully!', 'success');
 
-    // Sync deletion to cloud if signed in
+    // Sync deletion to cloud with tombstone if signed in
     if (user) {
       deletePromptFromCloud(user.uid, prompt.id).catch((err) => {
         console.error('Failed to sync deletion to cloud', err);
@@ -521,6 +611,8 @@ export const App: React.FC = () => {
     content: string;
     tags: string[];
   }) => {
+    const now = new Date().toISOString();
+
     if (data.id) {
       // Update existing
       const existing = prompts.find((p) => p.id === data.id);
@@ -530,7 +622,8 @@ export const App: React.FC = () => {
         content: data.content,
         preview: createPreviewFromContent(data.content),
         tags: data.tags,
-        createdAt: existing?.createdAt || new Date().toISOString(),
+        createdAt: existing?.createdAt || now,
+        updatedAt: now,
         lastUsed: existing?.lastUsed || null,
         useCount: existing?.useCount || 0
       };
@@ -552,7 +645,8 @@ export const App: React.FC = () => {
         content: data.content,
         preview: createPreviewFromContent(data.content),
         tags: data.tags,
-        createdAt: new Date().toISOString(),
+        createdAt: now,
+        updatedAt: now,
         lastUsed: null,
         useCount: 0
       };
@@ -572,6 +666,7 @@ export const App: React.FC = () => {
   };
 
   const handleAcceptAiPrompt = (generatedContent: string) => {
+    const now = new Date().toISOString();
     setEditingPrompt(null);
     setIsNewEditOpen(true);
     setEditingPrompt({
@@ -580,7 +675,8 @@ export const App: React.FC = () => {
       preview: createPreviewFromContent(generatedContent),
       content: generatedContent,
       tags: ['ai-generated'],
-      createdAt: new Date().toISOString(),
+      createdAt: now,
+      updatedAt: now,
       lastUsed: null,
       useCount: 0
     });
@@ -644,6 +740,7 @@ export const App: React.FC = () => {
                 prompt={prompt}
                 onClick={() => setDetailPrompt(prompt)}
                 onUse={() => handleUsePrompt(prompt)}
+                onDuplicate={() => handleDuplicatePrompt(prompt)}
                 onExport={() => handleExportPrompt(prompt)}
                 onEdit={() => handleOpenEdit(prompt)}
               />
@@ -667,6 +764,7 @@ export const App: React.FC = () => {
         isOpen={Boolean(detailPrompt)}
         onClose={() => setDetailPrompt(null)}
         onUse={handleUsePrompt}
+        onDuplicate={handleDuplicatePrompt}
         onEdit={handleOpenEdit}
         onDelete={handleDeletePrompt}
       />

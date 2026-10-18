@@ -31,10 +31,17 @@
         },
         "createdAt": {
           "type": "string",
+          "maxLength": 50,
           "description": "ISO timestamp when the prompt was created"
+        },
+        "updatedAt": {
+          "type": "string",
+          "maxLength": 50,
+          "description": "ISO timestamp when the prompt title, content, or tags were last modified"
         },
         "lastUsed": {
           "type": "string",
+          "maxLength": 50,
           "description": "ISO timestamp when the prompt was last copied or used"
         },
         "useCount": {
@@ -52,7 +59,35 @@
         "content",
         "tags",
         "createdAt",
+        "updatedAt",
         "useCount"
+      ]
+    },
+    "Tombstone": {
+      "title": "Tombstone",
+      "description": "Deletion tombstone preventing resurrecting deleted prompts across devices",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Identifier of the deleted prompt"
+        },
+        "deletedAt": {
+          "type": "string",
+          "maxLength": 50,
+          "description": "ISO timestamp when the prompt was deleted"
+        },
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Firebase UID of the owner"
+        }
+      },
+      "required": [
+        "id",
+        "deletedAt",
+        "userId"
       ]
     }
   },
@@ -60,6 +95,10 @@
     "/users/{userId}/prompts/{promptId}": {
       "schema": "Prompt",
       "description": "Collection of prompts belonging to a specific authenticated user"
+    },
+    "/users/{userId}/tombstones/{promptId}": {
+      "schema": "Tombstone",
+      "description": "Collection of deletion tombstones belonging to a specific authenticated user"
     }
   }
 }

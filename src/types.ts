@@ -5,8 +5,21 @@ export interface Prompt {
   content: string;
   tags: string[];
   createdAt: string;
+  updatedAt: string;
   lastUsed: string | null;
   useCount: number;
+}
+
+export interface PromptTombstone {
+  id: string;
+  deletedAt: string;
+  userId: string;
+}
+
+export interface BackupResult {
+  success: boolean;
+  key?: string;
+  error?: string;
 }
 
 export interface AiSettings {

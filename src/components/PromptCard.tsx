@@ -6,6 +6,7 @@ interface PromptCardProps {
   prompt: Prompt;
   onClick: () => void;
   onUse: (e: React.MouseEvent) => void;
+  onDuplicate: (e: React.MouseEvent) => void;
   onExport: (e: React.MouseEvent) => void;
   onEdit: (e: React.MouseEvent) => void;
 }
@@ -14,6 +15,7 @@ export const PromptCard: React.FC<PromptCardProps> = ({
   prompt,
   onClick,
   onUse,
+  onDuplicate,
   onExport,
   onEdit
 }) => {
@@ -61,6 +63,14 @@ export const PromptCard: React.FC<PromptCardProps> = ({
           title="Copy prompt to clipboard"
         >
           <i className="fas fa-copy"></i> Use
+        </button>
+        <button
+          type="button"
+          className="action-btn secondary duplicate-prompt-btn"
+          onClick={onDuplicate}
+          title="Duplicate prompt"
+        >
+          <i className="fas fa-clone"></i> Duplicate
         </button>
         <button
           type="button"

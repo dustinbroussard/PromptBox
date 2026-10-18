@@ -52,6 +52,7 @@ export function normalizePrompt(raw: any): Prompt {
 
   const createdAtFallback = new Date().toISOString();
   const createdAt = normalizeDateToIso(raw && raw.createdAt, createdAtFallback) || createdAtFallback;
+  const updatedAt = normalizeDateToIso(raw && raw.updatedAt, createdAt) || createdAt;
 
   let lastUsed: string | null = null;
   if (raw && raw.lastUsed !== undefined && raw.lastUsed !== null && raw.lastUsed !== '') {
@@ -72,6 +73,7 @@ export function normalizePrompt(raw: any): Prompt {
     content,
     tags: normalizeTags(raw && raw.tags),
     createdAt,
+    updatedAt,
     lastUsed,
     useCount
   };
