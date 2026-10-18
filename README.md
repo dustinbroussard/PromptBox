@@ -1,11 +1,34 @@
-<div align="center">
+# PromptBox
 
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+PromptBox is a modern prompt management Progressive Web Application (PWA) rewritten in **React 19**, **TypeScript**, and **Vite** for creating, organizing, enhancing, and exporting prompts.
 
-  <h1>Built with AI Studio</h2>
+## Features
 
-  <p>The fastest path from prompt to production with Gemini.</p>
+- **Prompt Management**: Create, edit, delete, and organize prompts with custom tags.
+- **Search & Filtering**: Real-time prompt search across titles, contents, and tags, with tag-based filtering and multi-criteria sorting (newest, oldest, alphabetical, most used).
+- **Prompt Details & Clipboard**: Interactive prompt view modal with one-click copy to clipboard, tracking use count and last-used timestamp.
+- **Import / Export**: Full support for single prompt and bulk prompt exports (JSON format v2) with optional AI settings, drag-and-drop import, and merge/overwrite/replace behaviors.
+- **AI Prompt Lab & Enhancement**: Enhance prompts directly using OpenRouter models (with auto model fetching and free-model indicators) or generate drafts in the AI Prompt Lab.
+- **AMOLED Dark & Light Themes**: Seamless theme switcher persisting user preference and syncing with system color scheme.
+- **Progressive Web App**: Offline support and native install prompt integration.
 
-  <a href="https://aistudio.google.com/apps">Start building</a>
+## Getting Started
 
-</div>
+### Development
+```bash
+npm run dev
+```
+
+### Production Build
+```bash
+npm run build
+```
+
+### Tests
+```bash
+npm test
+```
+
+## Security
+
+OpenRouter API keys are stored in `localStorage`; use a restricted-privilege key and rotate it regularly.

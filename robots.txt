@@ -1,0 +1,4 @@
+# This is a simple robots.txt file to allow all crawlers.
+# For a PWA, we generally want all content to be accessible.
+User-agent: *
+Allow: /
