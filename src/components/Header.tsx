@@ -82,7 +82,7 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
 
           <button
-            className="header-btn header-btn-text"
+            className="header-btn header-btn-text desktop-only"
             id="ai-assistant-btn"
             title="AI Prompt Lab"
             onClick={onOpenAiAssistant}
@@ -91,7 +91,7 @@ export const Header: React.FC<HeaderProps> = ({
             <i className="fas fa-wand-magic-sparkles"></i>
           </button>
           <button
-            className="header-btn header-btn-text"
+            className="header-btn header-btn-text desktop-only"
             id="import-export-btn"
             title="Import / Export"
             onClick={onOpenImportExport}
@@ -113,70 +113,73 @@ export const Header: React.FC<HeaderProps> = ({
             id="settings-btn"
             title="Settings"
             onClick={onOpenSettings}
-            aria-label="Open AI Settings"
+            aria-label="Open Settings"
           >
             <i className="fas fa-cog"></i>
           </button>
 
-          {/* User Auth Section */}
-          {isAuthLoading ? (
-            <button className="header-btn" disabled title="Authenticating...">
-              <i className="fas fa-spinner fa-spin"></i>
-            </button>
-          ) : user ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginLeft: '4px' }}>
-              {user.photoURL ? (
-                <img
-                  src={user.photoURL}
-                  alt={user.displayName || user.email || 'User'}
-                  style={{
-                    width: '30px',
-                    height: '30px',
-                    borderRadius: '50%',
-                    border: '1px solid var(--border)'
-                  }}
-                  title={`Signed in as ${user.displayName || user.email}`}
-                />
-              ) : (
-                <div
-                  style={{
-                    width: '30px',
-                    height: '30px',
-                    borderRadius: '50%',
-                    background: 'var(--accent-primary)',
-                    color: 'var(--bg-primary)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontWeight: 600,
-                    fontSize: '0.85rem'
-                  }}
-                  title={`Signed in as ${user.displayName || user.email}`}
-                >
-                  {(user.displayName || user.email || 'U').charAt(0).toUpperCase()}
-                </div>
-              )}
-              <button
-                className="header-btn"
-                id="sign-out-btn"
-                title={`Sign out (${user.email || 'Account'})`}
-                onClick={onSignOut}
-                aria-label="Sign out"
-              >
-                <i className="fas fa-arrow-right-from-bracket"></i>
+          {/* User Auth Section (Desktop only - accessible in Settings on mobile) */}
+          <div className="header-auth-section desktop-only">
+            {isAuthLoading ? (
+              <button className="header-btn" disabled title="Authenticating...">
+                <i className="fas fa-spinner fa-spin"></i>
               </button>
-            </div>
-          ) : (
-            <button
-              className="action-btn secondary"
-              style={{ padding: '6px 12px', fontSize: '0.85rem', marginLeft: '4px' }}
-              onClick={onSignIn}
-              title="Sign in with Google to sync prompts across devices"
-            >
-              <i className="fab fa-google" style={{ marginRight: '6px' }}></i>
-              <span>Sign In</span>
-            </button>
-          )}
+            ) : user ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginLeft: '4px' }}>
+                {user.photoURL ? (
+                  <img
+                    src={user.photoURL}
+                    alt={user.displayName || user.email || 'User'}
+                    style={{
+                      width: '30px',
+                      height: '30px',
+                      borderRadius: '50%',
+                      border: '1px solid var(--border)'
+                    }}
+                    title={`Signed in as ${user.displayName || user.email}`}
+                  />
+                ) : (
+                  <div
+                    style={{
+                      width: '30px',
+                      height: '30px',
+                      borderRadius: '50%',
+                      background: 'var(--accent-primary)',
+                      color: 'var(--bg-primary)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontWeight: 600,
+                      fontSize: '0.85rem'
+                    }}
+                    title={`Signed in as ${user.displayName || user.email}`}
+                  >
+                    {(user.displayName || user.email || 'U').charAt(0).toUpperCase()}
+                  </div>
+                )}
+                <button
+                  className="header-btn"
+                  id="sign-out-btn"
+                  title={`Sign out (${user.email || 'Account'})`}
+                  onClick={onSignOut}
+                  aria-label="Sign out"
+                >
+                  <i className="fas fa-arrow-right-from-bracket"></i>
+                </button>
+              </div>
+            ) : (
+              <button
+                className="action-btn secondary"
+                id="header-sign-in-btn"
+                style={{ padding: '6px 12px', fontSize: '0.85rem', marginLeft: '4px', whiteSpace: 'nowrap' }}
+                onClick={onSignIn}
+                title="Sign in with Google to sync prompts across devices"
+              >
+                <i className="fab fa-google" style={{ marginRight: '6px' }}></i>
+                <span>Sign In</span>
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </header>

@@ -1,266 +1,191 @@
-# PromptBox Cross-Device Sync & Reliability Implementation Plan (Final Revision)
+# PromptBox — Mobile UX Cleanup Plan
 
-A robust, hardened, privacy-preserving synchronization architecture for PromptBox that protects local data during startup, provides cross-device deletion tombstones, handles offline initial synchronization safely, guarantees idempotent live-sync conflict resolution, and structures Vite production assets cleanly.
+A focused plan to deliver a clean, ergonomic mobile experience for PromptBox across viewport widths from 320px to 430px, eliminating horizontal overflow at its source while preserving full desktop functionality and Firebase real-time sync.
+
+---
 
 ## User Review & Critical Decisions
 
 > [!IMPORTANT]
-> This final revision addresses all 6 architectural and operational requirements:
-> 1. **Cross-Device Deletion Tombstones**: Deletions are stored in Firestore under `/users/{userId}/tombstones/{promptId}` and never auto-pruned. Offline or stale devices consult this collection before merging, preventing resurrecting deleted prompts.
-> 2. **Offline Initial Sync Deferral**: If the initial server fetch fails, cloud state is treated as *unknown* (not empty). Local prompts remain completely untouched; no overwriting, seeding, or replacement occurs until the server confirms cloud contents.
-> 3. **Vite Production Assets (`public/`)**: All root static assets (`service-worker.js`, `offline.html`, `manifest.json`, `icons/`, `robots.txt`) are organized in Vite's `public/` directory so they are cleanly emitted to `dist/` with exact root URLs.
-> 4. **Live-Sync Idempotent Conflict Resolution**: Live snapshot reconciliation compares `updatedAt` (with legacy fallback to `createdAt`). Concurrent divergent edits generate a deterministic conflict copy ID to prevent duplicate copies on repeated snapshots.
-> 5. **Firestore Document Integrity & Console Verification**: Enforces `incoming().id == promptId` in security rules for prompts and tombstones on the named database `ai-studio-promptbox-87c7a06a-8913-479e-b4a0-45a5035770d4`. Explicit manual Firebase Console checks are defined.
-> 6. **Full Validation Matrix**: Preserves local-only AI keys, PWA installability, and themes, backed by automated unit tests and manual cross-device testing.
+> **Preserving Desktop vs. Mobile Streamlining**
+> - **Desktop (≥ 768px)**: Preserves the existing top-bar layout with quick-action buttons for AI Lab, Import/Export, Theme Toggle, Settings, and direct Google Auth / Account Avatar.
+> - **Mobile (< 768px)**: Streamlines the sticky header to Brand Title + Sync Indicator + Theme Toggle + Settings Gear. Sign In/Out, Import/Export, and AI Lab are neatly organized inside the Settings view under three dedicated sections.
+> - **Zero Backend / Sync Disruption**: No changes will be made to Firestore rules, data schemas, sync reconciliation algorithms, or local storage keys.
 
 ---
 
-## 1. Cross-Device Deletion Tombstones
+## 1. Analysis of Horizontal Overflow Causes
 
-### 1.1 Architecture & Schema
-Instead of a device-only `localStorage` deletion log, deletions are persisted in Firestore so all devices share the deletion history:
-
-- **Collection Path**: `/users/{userId}/tombstones/{promptId}`
-- **Tombstone Document Schema**:
-  ```typescript
-  export interface PromptTombstone {
-    id: string;        // ID of the deleted prompt (matches document ID)
-    deletedAt: string; // ISO 8601 timestamp
-    userId: string;    // Owner UID
-  }
-  ```
-
-### 1.2 Synchronization Rules
-- **On Deletion**:
-  A Firestore batch write simultaneously deletes `/users/{userId}/prompts/{promptId}` and creates `/users/{userId}/tombstones/{promptId}`.
-- **On Merging / Reconnection**:
-  Before any device uploads or restores a local prompt, it queries `/users/{userId}/tombstones`. If a tombstone exists for that `id` with `deletedAt >= prompt.updatedAt`, the prompt is recognized as deleted and purged from the local device without uploading.
-- **No Automatic Pruning**:
-  Tombstones are never automatically pruned after 30 days, guaranteeing that devices offline for months will not resurrect deleted prompts.
-- **Intentional Recreation**:
-  If a user explicitly recreates or imports a prompt with the same ID, its new `updatedAt` is greater than `deletedAt`. In that case, the tombstone document is deleted and the new prompt is accepted.
-
----
-
-## 2. Offline Initial Synchronization (Safe Deferral)
-
-### 2.1 The Problem
-If a user signs in while offline or with an unstable network connection, an initial query to Firestore might fail or return an empty cache. Assuming the cloud is "empty" would cause local prompts to overwrite the cloud or trigger an erroneous sync choice.
-
-### 2.2 Safe Deferral Logic
-1. When authentication is confirmed, the app requests cloud prompts and tombstones specifically from the server:
-   ```typescript
-   try {
-     const cloudPrompts = await getDocsFromServer(collection(db, 'users', userId, 'prompts'));
-     const tombstones = await getDocsFromServer(collection(db, 'users', userId, 'tombstones'));
-     // Proceed to evaluate sync choice with verified server data
-   } catch (error) {
-     // Network failure: treat cloud library as UNKNOWN
-     setSyncState('SYNC_DEFERRED_OFFLINE');
-     // Do NOT attach live onSnapshot
-     // Do NOT show FirstTimeSync modal
-     // Do NOT wipe or overwrite local prompts
-   }
-   ```
-2. While in `SYNC_DEFERRED_OFFLINE`:
-   - All local prompts remain fully available and editable.
-   - The Header status indicator displays **"Offline"** with tooltip *"Offline - changes will sync when connected"*.
-   - A window `online` listener and reconnection retry automatically re-attempt the server query once connectivity is re-established.
-
----
-
-## 3. Vite Production Assets & PWA Compatibility
-
-### 3.1 Asset Directory Structure
-Move static files from the repository root into `public/` so Vite automatically copies them verbatim into `dist/` during `npm run build`:
+Rather than relying on `overflow-x: hidden` as a band-aid, the plan addresses the specific root causes of horizontal overflow across small mobile viewports (320px, 360px, 390px, 430px):
 
 ```
-public/
-├── service-worker.js
-├── offline.html
-├── manifest.json
-├── robots.txt
-└── icons/
-    ├── icon-192.png
-    └── icon-512.png
+┌────────────────────────────────────────────────────────────────────────┐
+│                        IDENTIFIED OVERFLOW CAUSES                      │
+├────────────────────────────────┬───────────────────────────────────────┤
+│ Component / File               │ Exact Root Cause                      │
+├────────────────────────────────┼───────────────────────────────────────┤
+│ Header                         │ Combined width of title (~160px) and  │
+│ src/components/Header.tsx      │ all action buttons (~280px-330px)     │
+│ src/style.css (.header)        │ with 40px padding exceeds 320px-430px.│
+├────────────────────────────────┼───────────────────────────────────────┤
+│ Controls & Filters             │ .controlsRow uses 2 columns (1fr 1fr) │
+│ src/components/ControlsSection │ down to 360px. At 360px-430px, Tag and│
+│ src/style.css (.controlsRow)   │ Sort labels + selects push past edge. │
+├────────────────────────────────┼───────────────────────────────────────┤
+│ Prompt Cards & Action Buttons  │ Four action buttons (Use, Duplicate,  │
+│ src/components/PromptCard.tsx  │ Export, Edit) with 10px 18px padding  │
+│ src/style.css (.prompt-actions)│ in a 248px-wide card inner container. │
+├────────────────────────────────┼───────────────────────────────────────┤
+│ Modal Footers & Text Breaks    │ .modal-footer lacks flex-wrap: wrap.  │
+│ src/components/*Modal.tsx      │ Long unbroken strings in title or     │
+│ src/style.css (.modal-footer)  │ prompt content lack word-break rules. │
+└────────────────────────────────┴───────────────────────────────────────┘
 ```
 
-### 3.2 Service Worker Modernization (`public/service-worker.js`)
-- **Cache Name**: `promptbox-cache-v5`
-- **Precaching**: Precache only static root shell assets:
-  ```javascript
-  const PRECACHE_URLS = [
-    '/',
-    '/index.html',
-    '/offline.html',
-    '/manifest.json',
-    '/icons/icon-192.png',
-    '/icons/icon-512.png'
-  ];
-  ```
-  *(Obsolete `/style.css` and `/script.js` references are removed)*.
-- **Activation Event**:
-  Iterate all cache names in `caches.keys()`. Delete any cache that is not `promptbox-cache-v5` (`promptbox-cache-v4`, etc.). Call `self.clients.claim()`.
-- **Fetch Strategy**:
-  - Requests to OpenRouter (`openrouter.ai`) and Firebase (`*.firebaseio.com`, `firestore.googleapis.com`, `identitytoolkit.googleapis.com`): Bypass service worker entirely.
-  - Hashed Vite bundles (`/assets/*`): Cache-first with network fallback.
-  - Page navigation: Network-first, falling back to cached `/index.html` or `/offline.html`.
+1. **Header Item Congestion (`src/components/Header.tsx`, `src/style.css:81-125`)**:
+   - The desktop header renders: Brand icon + Title ("PromptBox"), Sync status badge, AI Lab button, Import/Export button, Theme toggle, Settings button, and either a Google Sign In button (~110px) or User Avatar + Sign Out button (~72px).
+   - At 320px–430px, `.header-content` needs over 460px to display all these inline items without wrapping or pushing against viewport edges.
+2. **Filter & Sort Grid Breakpoint (`src/style.css:725-755`)**:
+   - `.controlsRow` is configured with `grid-template-columns: 1fr 1fr; gap: 12px;`.
+   - The responsive media query only stacks them at `max-width: 360px`. Between 360px and 430px (e.g., iPhone 13/14 at 390px, Galaxy S20 at 360px), the two columns cram the select inputs and `.sort-label` with `white-space: nowrap`, causing clipping and lateral push.
+3. **PromptCard Action Cluster (`src/components/PromptCard.tsx`, `src/style.css:429-450`)**:
+   - Each card hosts 4 action buttons: "Use", "Duplicate", "Export", "Edit".
+   - On a 320px screen (`main-container` 16px padding on both sides = 288px; card 20px padding on both sides = 248px inner width), four buttons with `padding: 10px 18px` exceed the available width.
+4. **Modal Footers & Content Wrapping (`src/components/PromptDetailModal.tsx`, `src/style.css:564-571`)**:
+   - `.modal-footer` uses `display: flex; justify-content: flex-end; gap: 8px;` without `flex-wrap: wrap`. In `PromptDetailModal`, 4 buttons ("Copy Prompt", "Duplicate", "Edit", "Delete") overflow the 240px available width of a 90%-width modal on 320px screens.
+   - `.modal-prompt-content` lacks `overflow-wrap: break-word` and `word-break: break-word`, so long strings (URLs, continuous code, file hashes) force modal width expansion.
 
 ---
 
-## 4. Live-Sync Conflict Resolution & Legacy Migration
+## 2. Proposed Mobile Header & Settings Organization
 
-### 4.1 Timestamp Invariant (`updatedAt`)
-- Every prompt has:
-  - `createdAt`: Set once on creation; immutable.
-  - `updatedAt`: Set on creation, and refreshed whenever title, content, or tags change.
-  - `lastUsed`: Updated only when copied/used (does not affect `updatedAt`).
+### A. Compact Mobile Header (< 768px)
+- **Left**: Compact brand title (`PromptBox` with hammer icon, scaled cleanly to 1.15rem).
+- **Right**:
+  - Compact Sync Indicator: Dot + icon (with tooltip accessible on tap).
+  - Theme Toggle (`#theme-toggle-btn`): Instant switch between AMOLED Dark and Light.
+  - Settings Button (`#settings-btn`): Highlighted gear icon that serves as the single entry point for preferences, account, data, and AI.
+- **Desktop (≥ 768px)**: Unchanged. Keeps direct buttons for AI Lab, Import/Export, and direct Sign In/Avatar in the header.
 
-### 4.2 Legacy Cloud Migration
-- If a cloud document lacks `updatedAt`, the client safely defaults:
-  `updatedAt = data.updatedAt || data.createdAt || new Date().toISOString()`.
+### B. Settings View Organization
+The Settings modal (`src/components/AiSettingsModal.tsx` upgraded into a unified `src/components/SettingsModal.tsx`) will be structured into three logical, clearly separated sections:
 
-### 4.3 Idempotent Conflict Resolution During Live Sync
-When a remote snapshot arrives for an existing prompt ID that also has uncommitted local edits:
-1. If `tombstones.has(prompt.id)`: The prompt is deleted locally.
-2. If `remote.updatedAt > local.updatedAt`: The remote version replaces the local version.
-3. If `local.updatedAt > remote.updatedAt`: The local version is retained and will push to Firestore.
-4. If contents differ and both were edited concurrently:
-   - The version with the higher timestamp retains the original `id`.
-   - The other version is preserved as a conflict copy with a **deterministic ID**:
-     `conflictId = `${prompt.id}_conflict_${remote.updatedAt.replace(/[:.]/g, '-')}`;`
-   - Using a deterministic ID ensures repeated snapshots from Firestore do **not** generate duplicate conflict copies.
-   - Title is labeled: `"${prompt.title} (Conflict Copy)"`.
-
----
-
-## 5. Firestore Document Integrity & Security Rules
-
-### 5.1 Document Integrity
-- Prompt document path: `/users/{userId}/prompts/{promptId}`
-- Tombstone document path: `/users/{userId}/tombstones/{promptId}`
-- Invariant: `incoming().id == promptId` and `incoming().userId == userId`.
-
-### 5.2 Updated `firestore.rules`
-
-```javascript
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-    match /{document=**} {
-      allow read, write: if false;
-    }
-
-    function isSignedIn() {
-      return request.auth != null;
-    }
-
-    function isOwner(userId) {
-      return isSignedIn() && request.auth.uid == userId;
-    }
-
-    function isValidId(id) {
-      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
-    }
-
-    function incoming() {
-      return request.resource.data;
-    }
-
-    function existing() {
-      return resource.data;
-    }
-
-    function isValidPrompt(data, userId) {
-      return data.keys().hasAll(['id', 'title', 'content', 'tags', 'createdAt', 'updatedAt', 'useCount'])
-        && data.keys().hasOnly(['id', 'title', 'preview', 'content', 'tags', 'createdAt', 'updatedAt', 'lastUsed', 'useCount', 'userId'])
-        && data.id is string && data.id.size() <= 128
-        && data.title is string && data.title.size() <= 500
-        && (!('preview' in data) || data.preview == null || (data.preview is string && data.preview.size() <= 1000))
-        && data.content is string && data.content.size() <= 100000
-        && data.tags is list && data.tags.size() <= 50
-        && data.createdAt is string && data.createdAt.size() <= 50
-        && data.updatedAt is string && data.updatedAt.size() <= 50
-        && (!('lastUsed' in data) || data.lastUsed == null || (data.lastUsed is string && data.lastUsed.size() <= 50))
-        && data.useCount is number && data.useCount >= 0
-        && (!('userId' in data) || data.userId == userId || data.userId == request.auth.uid);
-    }
-
-    function isValidTombstone(data, userId) {
-      return data.keys().hasAll(['id', 'deletedAt', 'userId'])
-        && data.keys().hasOnly(['id', 'deletedAt', 'userId'])
-        && data.id is string && data.id.size() <= 128
-        && data.deletedAt is string && data.deletedAt.size() <= 50
-        && data.userId == userId;
-    }
-
-    // Prompts Collection
-    match /users/{userId}/prompts/{promptId} {
-      allow get, list: if isOwner(userId);
-      allow create: if isOwner(userId) && isValidId(promptId) && incoming().id == promptId && isValidPrompt(incoming(), userId);
-      allow update: if isOwner(userId) && isValidId(promptId) && incoming().id == promptId
-        && isValidPrompt(incoming(), userId)
-        && incoming().createdAt == existing().createdAt;
-      allow delete: if isOwner(userId) && isValidId(promptId);
-    }
-
-    // Deletion Tombstones Collection
-    match /users/{userId}/tombstones/{promptId} {
-      allow get, list: if isOwner(userId);
-      allow create, update: if isOwner(userId) && isValidId(promptId) && incoming().id == promptId && isValidTombstone(incoming(), userId);
-      allow delete: if isOwner(userId) && isValidId(promptId); // Permitted for intentional prompt recreation
-    }
-  }
-}
+```
+┌────────────────────────────────────────────────────────┐
+│                        SETTINGS                        │
+├────────────────────────────────────────────────────────┤
+│ 1. ACCOUNT & SYNC                                      │
+│    • Signed in: User avatar, name, email, Sign Out CTA │
+│    • Signed out: "Sign in with Google" card            │
+│    • Real-time sync status indicator & explanation    │
+├────────────────────────────────────────────────────────┤
+│ 2. PROMPT DATA                                         │
+│    • Export Prompts (JSON bundle with optional AI key) │
+│    • Import Prompts (Merge, Overwrite, or Replace All) │
+│    • Library stats: Active prompts count               │
+├────────────────────────────────────────────────────────┤
+│ 3. AI TOOLS                                            │
+│    • "Open AI Prompt Lab" action launcher              │
+│    • OpenRouter API Key configuration                  │
+│    • Model selector with dynamic fetching & FREE flags │
+│    • Custom system enhancement prompt textarea         │
+└────────────────────────────────────────────────────────┘
 ```
 
-### 5.3 Firebase Console Manual Verification Steps
-1. **Firestore Database Verification**:
-   - Open Firebase Console > **Firestore Database**.
-   - Verify the database ID: `ai-studio-promptbox-87c7a06a-8913-479e-b4a0-45a5035770d4`.
-   - Confirm the location and that database mode is active.
-2. **Rules Verification**:
-   - In Firestore Database, click the **Rules** tab.
-   - Confirm the rules match the specification above.
-3. **Authentication Verification**:
-   - Navigate to **Authentication > Sign-in method**.
-   - Confirm **Google** is Enabled with the Web client ID matching `firebase-applet-config.json`.
-4. **Authorized Domains**:
-   - Under **Authentication > Settings > Authorized domains**, confirm the app preview URL domain is present.
+1. **Section 1: Account & Sync**:
+   - **Signed In State**: Displays user photo/avatar, display name, email, sync status badge ("Connected to cloud"), and a dedicated "Sign Out" button.
+   - **Signed Out State**: Explains cross-device synchronization benefits, shows "Local Storage Only" status, and provides the "Sign in with Google" button.
+   - Connects directly to existing `handleSignIn` and `handleSignOut` handlers.
+2. **Section 2: Prompt Data**:
+   - **Export Prompts**: Action button opening the Export flow (`onOpenExport`).
+   - **Import Prompts**: Action button opening the Import flow (`onOpenImport`).
+   - Displays current prompt count and library status.
+3. **Section 3: AI Tools**:
+   - **AI Prompt Lab Launcher**: Direct button to launch the AI Prompt Lab assistant modal (`onOpenAiAssistant`).
+   - **AI Settings Form**: Retains all existing fields:
+     - OpenRouter API key input with link to openrouter.ai.
+     - Model selector with live fetching from OpenRouter and `FREE` badges.
+     - System enhancement prompt textarea.
+     - "Save Settings" button with feedback toast.
 
 ---
 
-## 6. Exact Files to Change
+## 3. Smallest Set of Files to Modify
 
-| File | Planned Changes |
-| :--- | :--- |
-| **`public/`** *(New Directory)* | Relocate `service-worker.js`, `offline.html`, `manifest.json`, `robots.txt`, and `icons/` into `public/`. |
-| **`public/service-worker.js`** | Update to `promptbox-cache-v5`, purge old caches, and precache clean root assets. |
-| **`index.html`** | Verify manifest, icons, and service-worker registration point to root paths. |
-| **`src/types.ts`** | Add `updatedAt` to `Prompt`; add `PromptTombstone` and `BackupResult` interfaces. |
-| **`src/utils/importExport.ts`** | Normalize `updatedAt` with fallback to `createdAt`; update import reconciliation. |
-| **`src/utils/sampleData.ts`** | Add initial `updatedAt` to sample prompts. |
-| **`src/firebase/syncService.ts`** | Implement tombstone CRUD (`saveTombstone`, `fetchTombstones`); add `updatedAt` support; implement validated `backupLocalPrompts`; enforce mandatory backup checks; implement deterministic conflict copying. |
-| **`src/App.tsx`** | Implement offline sync deferral (`SYNC_DEFERRED_OFFLINE`); update save handlers to touch `updatedAt`; update delete handler to write tombstones; wire idempotent live conflict resolution. |
-| **`firestore.rules`** | Add tombstone validation rules and enforce `updatedAt` and `id == promptId`. |
-| **`firebase-blueprint.json`** | Add `Prompt` `updatedAt` property and document `tombstones` collection. |
-| **`tests/import_export.test.js`** | Add automated test suites for `updatedAt` normalization, legacy migration, and conflict idempotency. |
+Only **4 files** will be modified, ensuring tight containment and zero regression risks:
+
+1. `src/components/Header.tsx`:
+   - Introduce responsive utility classes or CSS hooks so secondary actions (`ai-assistant-btn`, `import-export-btn`, auth buttons) are hidden on mobile (`< 768px`) and visible on desktop (`≥ 768px`).
+   - Maintain full desktop layout and accessibility attributes.
+2. `src/components/SettingsModal.tsx` (renamed/expanded from `src/components/AiSettingsModal.tsx`):
+   - Add the three distinct sections: **Account & Sync**, **Prompt Data**, and **AI Tools**.
+   - Wire existing `onSignIn`, `onSignOut`, `onOpenImportExport`, and `onOpenAiAssistant` props.
+3. `src/App.tsx`:
+   - Pass user auth state, sync status, and modal opening callbacks into the updated Settings modal component.
+4. `src/style.css`:
+   - Refactor `.controlsRow` breakpoint to collapse to 1 column at `max-width: 640px` (or `480px`).
+   - Add `flex-wrap: wrap` and touch-target sizing (`min-height: 44px`) to `.prompt-actions`, `.modal-footer`, and `.form-actions`.
+   - Add `overflow-wrap: break-word` and `word-break: break-word` to `.prompt-title`, `.prompt-preview`, and `.modal-prompt-content`.
+   - Style the new Settings modal sections cleanly using the existing theme variables (`--bg-secondary`, `--bg-tertiary`, `--border`, `--text-primary`).
 
 ---
 
-## 7. Testing & Verification Specification
+## 4. Architecture & Data Flow
 
-### 7.1 Automated Tests (`npm test`)
-1. **Legacy Import Migration**: Importing a v1/v2 payload without `updatedAt` assigns `updatedAt = createdAt` without throwing.
-2. **`updatedAt` Integrity**: Editing title or content refreshes `updatedAt`, while copying only updates `lastUsed` and `useCount`.
-3. **Deterministic Conflict Resolution**: Reconciling two divergent prompts with identical timestamps produces an idempotent conflict copy ID; repeated passes do not generate multiple copies.
-4. **Tombstone Precedence**: A prompt whose ID exists in the tombstone list with `deletedAt >= updatedAt` is discarded during merge.
+```
+                      ┌────────────────────────┐
+                      │        App.tsx         │
+                      │ (Auth, Sync, Prompts)  │
+                      └───────────┬────────────┘
+                                  │
+         ┌────────────────────────┼────────────────────────┐
+         │                        │                        │
+         ▼                        ▼                        ▼
+┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
+│    Header.tsx    │    │ControlsSection.ts│    │ SettingsModal.ts │
+│                  │    │                  │    │                  │
+│ Mobile:          │    │ • Search Input   │    │ 1. Account & Sync│
+│  [Logo] [Status] │    │ • 1-Col Mobile   │    │ 2. Prompt Data   │
+│  [Theme] [Gear]  │    │   Tag & Sort     │    │ 3. AI Tools & Key│
+│ Desktop:         │    │                  │    │                  │
+│  Full Bar + Auth │    │                  │    │                  │
+└──────────────────┘    └──────────────────┘    └──────────────────┘
+```
 
-### 7.2 Production Build Verification (`npm run build`)
-- Check that `dist/service-worker.js`, `dist/offline.html`, `dist/manifest.json`, and `dist/icons/` exist directly in `dist/`.
-- Ensure TypeScript compilation and Vite bundling complete with 0 errors.
+---
 
-### 7.3 Manual Firebase Cross-Device Tests
-1. **Offline Initial Sign-In**: Disconnect network, sign in. Verify app enters `SYNC_DEFERRED_OFFLINE` with no data loss and no premature sync prompt. Reconnect network; verify cloud query runs cleanly.
-2. **Cross-Device Deletion & Stale Reconnection**: Create prompt on Device A and B. Delete prompt on Device A. Disconnect Device B, reconnect hours later. Verify Device B purges the prompt instead of re-uploading it.
-3. **Intentional Re-creation**: Create a prompt with the same ID after deletion. Verify the tombstone is deleted and the prompt persists.
+## 5. Responsive Verification & Test Checklist
+
+### Viewport Width Checks
+- [ ] **320px (Small Mobile, iPhone SE 1st Gen / Fold Inner)**:
+  - Header fits without horizontal scrollbar.
+  - Tag filter and Sort select stack vertically with readable labels.
+  - PromptCard buttons wrap cleanly; prompt titles wrap without overflowing card bounds.
+  - Modals (Settings, Prompt Detail, Edit Prompt) fit within 90% width with wrap-enabled footers.
+- [ ] **360px (Standard Android / Galaxy S20)**:
+  - Header title and actions fit comfortably.
+  - Card actions wrap into two balanced rows.
+  - Settings modal sections display without text clipping.
+- [ ] **390px (iPhone 12 / 13 / 14 / 15)**:
+  - Natural thumb reach for Search, Settings, and New Prompt.
+  - No horizontal scrolling anywhere on the page.
+- [ ] **430px (iPhone Pro Max / Plus)**:
+  - Proper padding alignment; search and filters maintain proportions.
+- [ ] **Desktop (≥ 1024px)**:
+  - Header displays full navigation: Sync Status, AI Lab, Import/Export, Theme Toggle, Settings, and Google Sign In / Account Avatar.
+  - Prompts grid displays multi-column responsive layout.
+
+### Functional Integrity Checks
+- [ ] **Google Sign In & Sign Out**:
+  - Sign in works from Settings modal (and from desktop header).
+  - Sign out terminates session and updates sync status to Local Cache cleanly.
+- [ ] **Import / Export**:
+  - Triggering Export from Settings modal downloads the JSON prompt bundle.
+  - Triggering Import from Settings modal opens import dialog and parses file correctly.
+- [ ] **AI Lab Access & AI Settings**:
+  - Launching AI Lab from Settings opens the AI Assistant modal.
+  - Modifying API Key, Model, and Enhancement Prompt saves to `localStorage` and triggers notifications.
+- [ ] **Prompt Operations**:
+  - Create, Edit, Delete, Duplicate, and Copy (Use) function across all viewports.
+- [ ] **PWA & Asset Verification**:
+  - All icons (`/icons/icon-192.png`, `/assets/icons/icon-192.png`) load without 404 or manifest warnings.

@@ -27,7 +27,7 @@ import { PromptCard } from './components/PromptCard';
 import { PromptDetailModal } from './components/PromptDetailModal';
 import { NewEditPromptModal } from './components/NewEditPromptModal';
 import { AiAssistantModal } from './components/AiAssistantModal';
-import { AiSettingsModal } from './components/AiSettingsModal';
+import { SettingsModal } from './components/SettingsModal';
 import { ImportExportModal } from './components/ImportExportModal';
 import { InstallModal } from './components/InstallModal';
 import { NotificationToast } from './components/NotificationToast';
@@ -798,11 +798,26 @@ export const App: React.FC = () => {
         onNotify={addNotification}
       />
 
-      <AiSettingsModal
+      <SettingsModal
         isOpen={isAiSettingsOpen}
         settings={aiSettings}
+        user={user}
+        isAuthLoading={isAuthLoading}
+        syncStatus={syncStatus}
+        promptsCount={prompts.length}
         onClose={() => setIsAiSettingsOpen(false)}
         onSave={(updated) => setAiSettings(updated)}
+        onSignIn={handleSignIn}
+        onSignOut={handleSignOut}
+        onOpenExport={() => {
+          setImportExportTab('export');
+          setIsImportExportOpen(true);
+        }}
+        onOpenImport={() => {
+          setImportExportTab('import');
+          setIsImportExportOpen(true);
+        }}
+        onOpenAiAssistant={() => setIsAiAssistantOpen(true)}
         onNotify={addNotification}
       />
 

@@ -27,7 +27,7 @@ export const PromptDetailModal: React.FC<PromptDetailModalProps> = ({
       <div className="modal-overlay" onClick={onClose}></div>
       <div className="modal-content">
         <div className="modal-header">
-          <h2 id="prompt-detail-title" className="modal-title">
+          <h2 id="prompt-detail-title" className="modal-title" style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
             {prompt.title}
           </h2>
           <button className="close-modal" onClick={onClose} aria-label="Close modal">
