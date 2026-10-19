@@ -437,23 +437,28 @@ body {
     display: flex;
     align-items: center;
     justify-content: flex-end;
-    gap: 8px;
-    margin-top: 8px;
+    gap: 10px;
+    margin-top: 10px;
     width: 100%;
 }
 
 .prompt-actions .action-btn {
-    width: 38px;
-    height: 38px;
-    min-width: 38px;
-    min-height: 38px;
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
     padding: 0;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    border-radius: 8px;
-    font-size: 0.95rem;
+    border-radius: 10px;
+    font-size: 1.1rem;
     flex-shrink: 0;
+    transition: transform 0.15s ease, background 0.2s ease;
+}
+
+.prompt-actions .action-btn:active {
+    transform: scale(0.92);
 }
 
 .action-btn {
@@ -778,13 +783,13 @@ body {
     }
 }
 
-/* Feature: Tag + Sort controls row */
+/* Feature: Tag + Sort controls row - horizontally aligned on all viewports */
 .controlsRow {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 12px;
-    align-items: end;
-    max-width: 100%;
+    align-items: center;
+    width: 100%;
 }
 
 .controlGroup {
@@ -797,18 +802,34 @@ body {
 .controlGroup .sort-label {
     margin-bottom: 0;
     white-space: nowrap;
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    flex-shrink: 0;
 }
 
 .controlGroup .sort-select {
     width: 100%;
     flex: 1;
     min-width: 0;
+    text-overflow: ellipsis;
 }
 
-@media (max-width: 640px) {
+@media (max-width: 480px) {
     .controlsRow {
-        grid-template-columns: 1fr;
-        gap: 10px;
+        gap: 8px;
+    }
+
+    .controlGroup {
+        gap: 6px;
+    }
+
+    .controlGroup .sort-label {
+        font-size: 0.85rem;
+    }
+
+    .controlGroup .sort-select {
+        padding: 7px 8px;
+        font-size: 0.82rem;
     }
 }
 
@@ -994,18 +1015,20 @@ body {
         flex-direction: row;
         justify-content: flex-end;
         align-items: center;
-        gap: 8px;
+        gap: 10px;
         width: 100%;
+        margin-top: 10px;
     }
 
     .prompt-actions .action-btn {
-        width: 38px;
-        height: 38px;
-        min-width: 38px;
-        min-height: 38px;
+        width: 44px;
+        height: 44px;
+        min-width: 44px;
+        min-height: 44px;
         padding: 0;
         justify-content: center;
-        font-size: 0.95rem;
+        border-radius: 10px;
+        font-size: 1.1rem;
     }
 }
 
